@@ -1,63 +1,199 @@
 # hubitatADC
-Hubitat Alarm.com App and Driver
 
-# Hubitat ADC App v1.1.2
-Hubitat Elevation app and device handler for alarm.com
+Hubitat Alarm.com integration — read-only alarm status monitoring with optional panel control.
 
-## What can I do with this app?
-This app and device driver lets you control your alarm.com panel through three
-switches (Disarm, Arm Stay, and Arm Away).  The app will poll the alarm.com
-API periodically to fetch the latest state and update the switches accordingly;
-Allowing for the app and the panel to function independently.
+Originally developed by Jeffrey M. Pierce. Continued development and modifications by [rjl77](https://github.com/rjl77/hubitatADC).
 
-## To Use
-On your Hubitat Elevation's admin page, select "Drivers Code", then click the
-"New Driver" button.  Paste the Groovy driver code from this repository into 
-the editor window and click the "SAVE" button.
+## Overview
 
-Next, on the admin page, select "Apps Code", then click the "New App" button.
-Paste the Groovy app code from this repository into the editor window and click
-the "SAVE" button.
+This integration connects a Hubitat Elevation hub to an Alarm.com security system.
 
-Navigate to the "Apps" section, and click the "New User App" button.  Select
-"Alarm.com Manager", and enter your ADC credentials in the provided form fields.
-Click "Done", and the app will attempt to retrieve your panel identification
-number and create the child devices for controlling your panel.
+It periodically polls Alarm.com to synchronize the panel's current armed/disarmed state with Hubitat devices.
 
-Once your panel ID has been discovered, your panel can be controlled via the
-three newly created child devices: ADC Disarm, ADC Arm Stay, ADC Arm Away.
-Feel free to rename these to whatever suits you.
+**Alarm control is disabled by default.** Users can explicitly enable arm/disarm commands in the app settings.
 
-At any given time, one of the three switches will always be "on".  For example,
-if your panel is armed stay, both arm away and disarm will be "off".  To
-disarm your panel, you can either turn "on" disarm or turn "off" arm stay.  If
-you wish to represent your panel with a single (most used) mode, add either
-arm stay or arm away to a dashboard or HUD of your choosing.
+### Devices
 
-Password encryption notes:  It is recommended that you select password
-encryption so that your alarm.com password is encrypted on the HE device.
-If you enable encryption, once your password is set it will not be populated
-in the preferences form.  If you update the app preferences, you can leave the
-password field blank and the existing encrypted value will be retained.  If
-you do not elect to encrypt your password, it will be re-populated in the
-preferences form for future updates.
+The app creates four child devices:
 
-It is also highly recommended that you use a secondary (service) account
-with reduced privleges that limit its ability to alter any alarm.com settings
-other than panel modes.
+| Device | Purpose | Default behavior |
+|---|---|---|
+| ADC Armed Status | Binary armed/disarmed indicator | Read-only |
+| ADC Disarm | Disarm control and status | Status only |
+| ADC Arm Stay | Arm Stay control and status | Status only |
+| ADC Arm Away | Arm Away control and status | Status only |
 
-Feedback on how to improve this project is always welcome.
+All four devices remain available even when alarm controls are disabled.
 
-## To Do List
-- Add flag to remove the disarm switch for those who would prefer to just use
-arm stay and arm away as toggles
-- Add ability to support multiple accounts to the same panel
+### Binary status indicator
 
-## v1.1.0 Changes
-- Added password encryption option
-- Fixed poll bug that did not properly unschedule previously set polling preference
-- Code cleanup and more comments
+The `ADC Armed Status` device provides a standard Hubitat Switch capability:
 
-## v1.1.2 Changes
-- Added additional polling options
-- Fixed polling default value bug
+| Switch state | Alarm state |
+|---|---|
+| `on` | Armed Stay or Armed Away |
+| `off` | Disarmed |
+
+The device is read-only. Its `on()` and `off()` commands do not change the alarm panel.
+
+Additional attributes provide more detailed information:
+
+| Attribute | Description |
+|---|---|
+| `alarmMode` | `disarmed`, `stay`, `away`, or `unknown` |
+| `statusValid` | `true` when the most recent poll confirmed a recognized alarm state; otherwise `false` |
+| `lastSuccessfulPoll` | Timestamp of the most recent successful status poll |
+
+If a poll fails, the last known switch state is preserved, but `statusValid` becomes `false` and `alarmMode` becomes `unknown`.
+
+**Important:** Automations requiring a verified alarm state should check `statusValid` as well as the switch state. A preserved switch value may be stale.
+
+## Installation
+
+### 1. Install the drivers
+
+In Hubitat, navigate to **Drivers Code → New Driver**.
+
+Install both driver files from this repository:
+
+- `adc-control-driver.groovy` — existing Alarm.com Panel Switch driver
+- `adc-status-driver.groovy` — new read-only Armed Status driver
+
+Save each driver.
+
+### 2. Install the app
+
+Navigate to **Apps Code → New App**.
+
+Paste the contents of `adc-manager-app.groovy` and click **Save**.
+
+### 3. Configure Alarm.com Manager
+
+Navigate to **Apps → Add User App → Alarm.com Manager**.
+
+Enter your Alarm.com credentials and configure the polling interval.
+
+Recommended settings:
+
+- **Encrypt Password:** Enabled
+- **Enable alarm control switches:** Disabled
+- **Enable debugging:** Disabled
+
+Click **Done**.
+
+The app attempts to authenticate with Alarm.com, discover the panel ID, and create the four child devices.
+
+### 4. Verify operation
+
+Open **Devices → ADC Armed Status**.
+
+Check that the device reports:
+
+- The correct `switch` state.
+- The correct `alarmMode`.
+- `statusValid = true`.
+- A recent `lastSuccessfulPoll` timestamp.
+
+The **Refresh** command requests an immediate status update.
+
+## Optional alarm control
+
+The existing three switches can arm or disarm the panel when **Enable alarm control switches** is explicitly enabled in Alarm.com Manager.
+
+When this setting is disabled:
+
+- The three devices remain visible.
+- Their states continue to reflect the actual alarm panel.
+- Arm/disarm commands sent through the switches are ignored.
+
+When enabled, the original switch behavior is available:
+
+- `ADC Disarm` — disarm the panel.
+- `ADC Arm Stay` — arm in Stay mode.
+- `ADC Arm Away` — arm in Away mode.
+
+The app also provides preferences for force bypass, silent arming, no entry delay, and behavior when the Disarm switch is turned off.
+
+**Security note:** Only enable control commands if you intend to allow Hubitat devices, dashboards, and automations to change the alarm state.
+
+## Polling and status reliability
+
+The integration polls Alarm.com at the interval selected in the app settings.
+
+A successful poll updates the child devices to match the actual panel state.
+
+If polling fails or returns an unrecognized state:
+
+- `ADC Armed Status` retains its last known `on`/`off` value.
+- `statusValid` becomes `false`.
+- `alarmMode` becomes `unknown`.
+- `lastSuccessfulPoll` retains its previous timestamp.
+
+A later successful poll restores valid status.
+
+The current implementation does not independently detect when scheduled polling stops running entirely. A future watchdog may address this.
+
+## Password and account security
+
+Password encryption is recommended. When enabled, the app stores an encrypted password in Hubitat and clears the password input field.
+
+When updating preferences, leave the password field blank to retain the existing encrypted value.
+
+Using a separate Alarm.com service account with the minimum permissions needed is recommended where supported.
+
+Authentication credentials, cookies, and request headers should not be written to debug logs.
+
+**Note:** This integration communicates with Alarm.com through web endpoints and may be affected by changes to Alarm.com's authentication or API behavior.
+
+## Updating an existing installation
+
+Install the new status driver before updating the manager app.
+
+Update the existing control driver and manager app without changing their Hubitat driver/app definitions or namespaces.
+
+After saving the updated code, open the installed Alarm.com Manager app and click **Done** to apply the new settings and create the status indicator.
+
+Existing control devices are preserved.
+
+**Important:** Alarm controls now default to disabled. Users who previously relied on Hubitat to arm or disarm their systems must explicitly enable them.
+
+## To Do
+
+- Add stale-status detection/watchdog for interrupted polling.
+- Improve authentication and polling failure handling.
+- Investigate support for multiple accounts or panels.
+- Review additional Alarm.com API compatibility issues.
+
+## Change History
+
+### Fork development — 2026-11-19
+
+- Added a read-only binary armed/disarmed status indicator.
+- Added detailed alarm mode and status validity attributes.
+- Added a last-successful-poll timestamp.
+- Made alarm control optional and disabled by default.
+- Improved synchronization of existing control switches.
+- Removed sensitive authentication and configuration logging.
+- Disabled debug logging by default.
+- Renamed the original driver source file for clarity.
+
+### v1.1.2 — Original project
+
+- Added additional polling options.
+- Fixed polling default value bug.
+
+### v1.1.0 — Original project
+
+- Added password encryption option.
+- Fixed polling bug that did not properly unschedule the previous polling preference.
+- Code cleanup and additional comments.
+
+## License
+
+Licensed under the Apache License, Version 2.0.
+
+Original work copyright 2020 Jeffrey M. Pierce.
+
+Fork modifications copyright 2026 rjl77.
+
+See the repository's license file for details.
